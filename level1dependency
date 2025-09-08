@@ -1,0 +1,21 @@
+for (CtField<?> field : ctClass.getFields()) {
+    boolean isAutowired = field.getAnnotations().stream()
+            .anyMatch(a -> a.getAnnotationType().getSimpleName().equals("Autowired"));
+
+    FieldInfo fieldInfo = new FieldInfo(
+            field.getSimpleName(),
+            field.getType().toString(),
+            isAutowired
+    );
+    classInfo.getFields().add(fieldInfo);
+
+    if (isAutowired) {
+        String dependencyType = field.getType().getQualifiedName(); // ✅ safer
+        CtClass<?> dependencyClass = classMap.get(dependencyType);
+
+        if (dependencyClass != null && hasSpringBeanAnnotation(dependencyClass)) {
+            ClassHierarchyInfo depInfo = extractDependency(dependencyClass, classMap);
+            classInfo.getLevel1Dependencies().add(depInfo);
+        }
+    }
+}
