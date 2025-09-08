@@ -19,3 +19,47 @@ for (CtField<?> field : ctClass.getFields()) {
         }
     }
 }
+
+private static boolean hasSpringBeanAnnotation(CtClass<?> ctClass) {
+    return ctClass.getAnnotations().stream()
+            .map(a -> a.getAnnotationType().getQualifiedName())
+            .anyMatch(qName ->
+                    qName.equals("org.springframework.stereotype.Service") ||
+                    qName.equals("org.springframework.stereotype.Component") ||
+                    qName.equals("org.springframework.stereotype.Repository")
+            );
+}
+
+
+private static ClassHierarchyInfo extractDependency(CtClass<?> dependencyClass, Map<String, CtClass<?>> classMap) {
+    ClassHierarchyInfo depInfo = new ClassHierarchyInfo();
+    depInfo.setClassName(dependencyClass.getQualifiedName());
+
+    // Fields
+    for (CtField<?> field : dependencyClass.getFields()) {
+        boolean isAutowired = field.getAnnotations().stream()
+                .anyMatch(a -> a.getAnnotationType().getSimpleName().equals("Autowired"));
+
+        depInfo.getFields().add(new FieldInfo(
+                field.getSimpleName(),
+                field.getType().toString(),
+                isAutowired
+        ));
+    }
+
+    // Methods
+    for (CtMethod<?> method : dependencyClass.getMethods()) {
+        MethodInfo methodInfo = new MethodInfo();
+        methodInfo.setName(method.getSimpleName());
+        methodInfo.setReturnType(method.getType().toString());
+        if (method.getBody() != null) {
+            methodInfo.setBody(method.getBody().toString());
+        }
+        method.getParameters().forEach(p ->
+                methodInfo.getParameters().add(new ParameterInfo(p.getSimpleName(), p.getType().toString())));
+        depInfo.getMethods().add(methodInfo);
+    }
+
+    return depInfo;
+}
+
