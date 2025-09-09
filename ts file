@@ -1,0 +1,203 @@
+import {
+  Component,
+  ElementRef,
+  OnDestroy,
+  OnInit,
+  ViewChild,
+} from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { HttpClient, HttpClientModule } from '@angular/common/http';
+import { Network, Options } from 'vis-network/standalone';
+
+type ParameterInfo = { name: string; type: string };
+type MethodInfo = {
+  name: string;
+  returnType: string;
+  body?: string | null;
+  parameters: ParameterInfo[];
+};
+type FieldInfo = { name: string; type: string; autowired: boolean };
+type ClassHierarchyInfo = {
+  className: string;
+  fields: FieldInfo[];
+  methods: MethodInfo[];
+  level1Dependencies: ClassHierarchyInfo[];
+};
+
+@Component({
+  selector: 'app-root',
+  standalone: true,
+  imports: [CommonModule, HttpClientModule],
+  templateUrl: './app.component.html',
+  styleUrls: ['./app.component.scss'],
+})
+export class AppComponent implements OnInit, OnDestroy {
+  @ViewChild('graphContainer', { static: true })
+  graphContainer!: ElementRef<HTMLDivElement>;
+
+  private network?: Network;
+  physicsEnabled = false;
+
+  constructor(private http: HttpClient) {}
+
+  ngOnInit(): void {
+    this.http
+      .get<ClassHierarchyInfo[]>('assets/class-hierarchy.json')
+      .subscribe((data) => this.renderGraph(data));
+  }
+
+  ngOnDestroy(): void {
+    this.network?.destroy();
+  }
+
+  private renderGraph(data: ClassHierarchyInfo[]) {
+    const nodes: any[] = [];
+    const edges: any[] = [];
+
+    const nodeId = (
+      kind: 'class' | 'method',
+      owner: string,
+      name: string
+    ) => `${kind}::${owner}::${name}`;
+
+    const ensureClassNode = (className: string) => {
+      const id = nodeId('class', className, className);
+      if (!nodes.find((n) => n.id === id)) {
+        nodes.push({
+          id,
+          label: className,
+          shape: 'box',
+          margin: 8,
+          font: { face: 'Inter, Roboto, Arial' },
+        });
+      }
+      return id;
+    };
+
+    const addMethodNodes = (className: string, methods: MethodInfo[]) => {
+      methods.forEach((m) => {
+        const mid = nodeId('method', className, m.name);
+        nodes.push({
+          id: mid,
+          label: `${m.name}()`,
+          shape: 'box',
+          margin: 6,
+          font: { face: 'Inter, Roboto, Arial', ital: true },
+        });
+        edges.push({
+          from: nodeId('class', className, className),
+          to: mid,
+          arrows: 'to',
+        });
+      });
+    };
+
+    const addAutowiredEdges = (fromClass: string, fields: FieldInfo[]) => {
+      fields
+        .filter((f) => f.autowired)
+        .forEach((f) => {
+          const fromId = ensureClassNode(fromClass);
+          const toId = ensureClassNode(f.type);
+          edges.push({
+            from: fromId,
+            to: toId,
+            arrows: 'to',
+            label: `@Autowired ${f.name}`,
+            font: { align: 'middle' },
+          });
+        });
+    };
+
+    const walk = (c: ClassHierarchyInfo) => {
+      ensureClassNode(c.className);
+      addMethodNodes(c.className, c.methods);
+      addAutowiredEdges(c.className, c.fields);
+      c.level1Dependencies?.forEach(walk);
+    };
+
+    data.forEach(walk);
+
+    const options: Options = {
+      layout: {
+        hierarchical: {
+          enabled: true,
+          direction: 'UD',
+          levelSeparation: 140,
+          nodeSpacing: 180,
+          sortMethod: 'directed',
+        },
+      },
+      physics: {
+        enabled: this.physicsEnabled,
+        hierarchicalRepulsion: {
+          nodeDistance: 180,
+        },
+      },
+      edges: {
+        arrows: { to: { enabled: true, type: 'arrow' } },
+        smooth: { type: 'cubicBezier', roundness: 0.4 },
+      },
+      nodes: {
+        shape: 'box',
+        borderWidth: 1,
+        shadow: { enabled: true, size: 6, x: 1, y: 1 },
+      },
+      interaction: {
+        hover: true,
+        tooltipDelay: 100,
+        navigationButtons: true,
+        keyboard: true,
+      },
+    };
+
+    this.network?.destroy();
+    this.network = new Network(
+      this.graphContainer.nativeElement,
+      { nodes, edges },
+      options
+    );
+
+    this.network.on('click', (params) => {
+      if (!params.nodes?.length) return;
+      const id = params.nodes[0] as string;
+      if (id.startsWith('method::')) {
+        const [_, owner, methodName] = id.split('::');
+        const method = this.findMethod(data, owner, methodName);
+        if (method) {
+          alert(
+            `${owner}.${method.name}()\n\nReturn: ${method.returnType}\n\nBody:\n${
+              method.body ?? '(no body)'
+            }`
+          );
+        }
+      }
+    });
+  }
+
+  private findMethod(
+    arr: ClassHierarchyInfo[],
+    cls: string,
+    m: string
+  ): MethodInfo | undefined {
+    for (const c of arr) {
+      if (c.className === cls) {
+        const hit = c.methods.find((mm) => mm.name === m);
+        if (hit) return hit;
+      }
+      const deeper = this.findMethod(c.level1Dependencies || [], cls, m);
+      if (deeper) return deeper;
+    }
+    return undefined;
+  }
+
+  fit() {
+    this.network?.fit({
+      animation: { duration: 500, easingFunction: 'easeInOutQuad' },
+    });
+  }
+
+  togglePhysics() {
+    this.physicsEnabled = !this.physicsEnabled;
+    this.network?.setOptions({ physics: { enabled: this.physicsEnabled } });
+  }
+}
