@@ -1,0 +1,9 @@
+<div class="toolbar">
+  <h1>Spoon Dependency Graph</h1>
+  <button (click)="fit()">Fit</button>
+  <button (click)="togglePhysics()">
+    {{ physicsEnabled ? 'Disable' : 'Enable' }} Physics
+  </button>
+</div>
+
+<div class="graph" #graphContainer></div>
