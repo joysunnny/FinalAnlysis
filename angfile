@@ -1,0 +1,147 @@
+export class GraphComponent implements AfterViewInit {
+  @ViewChild('visContainer', { static: true }) visContainer!: ElementRef;
+
+  // === Paste your JSON here ===
+  data: any = [
+    {
+      "className": "com.example.controller.UserController",
+      "fields": [
+        {
+          "name": "userService",
+          "type": "com.example.service.UserService",
+          "autowired": true
+        }
+      ],
+      "methods": [
+        {
+          "name": "createUser",
+          "returnType": "ResponseEntity<User>",
+          "body": "return ResponseEntity.ok(userService.saveUser(user));",
+          "parameters": [
+            { "name": "user", "type": "User" }
+          ]
+        },
+        {
+          "name": "getUser",
+          "returnType": "ResponseEntity<User>",
+          "body": "return ResponseEntity.ok(userService.findById(id));",
+          "parameters": [
+            { "name": "id", "type": "Long" }
+          ]
+        }
+      ],
+      "level1Dependencies": [
+        {
+          "className": "com.example.service.UserService",
+          "fields": [
+            {
+              "name": "userRepository",
+              "type": "com.example.repository.UserRepository",
+              "autowired": true
+            }
+          ],
+          "methods": [
+            {
+              "name": "saveUser",
+              "returnType": "User",
+              "body": "return userRepository.save(user);",
+              "parameters": [{ "name": "user", "type": "User" }]
+            },
+            {
+              "name": "findById",
+              "returnType": "User",
+              "body": "return userRepository.findById(id).orElse(null);",
+              "parameters": [{ "name": "id", "type": "Long" }]
+            }
+          ],
+          "level1Dependencies": [
+            {
+              "className": "com.example.repository.UserRepository",
+              "fields": [],
+              "methods": [
+                {
+                  "name": "save",
+                  "returnType": "User",
+                  "body": "/* JPA save logic */",
+                  "parameters": [{ "name": "user", "type": "User" }]
+                },
+                {
+                  "name": "findById",
+                  "returnType": "Optional<User>",
+                  "body": "/* JPA findById logic */",
+                  "parameters": [{ "name": "id", "type": "Long" }]
+                }
+              ],
+              "level1Dependencies": []
+            }
+          ]
+        }
+      ]
+    }
+  ];
+
+  ngAfterViewInit(): void {
+    const nodes: any[] = [];
+    const edges: any[] = [];
+    let nodeId = 1;
+
+    const addClassGraph = (classObj: any, parentId: number | null = null) => {
+      const classNodeId = nodeId++;
+      nodes.push({
+        id: classNodeId,
+        label: classObj.className,
+        shape: 'box',
+        color: '#ffd966'
+      });
+
+      if (parentId) {
+        edges.push({ from: parentId, to: classNodeId, arrows: 'to' });
+      }
+
+      // Methods
+      classObj.methods.forEach((method: any) => {
+        const methodNodeId = nodeId++;
+        nodes.push({
+          id: methodNodeId,
+          label: `${method.name} : ${method.returnType}`,
+          shape: 'ellipse',
+          color: '#9fc5e8'
+        });
+        edges.push({ from: classNodeId, to: methodNodeId, arrows: 'to' });
+
+        // Parameters
+        method.parameters.forEach((param: any) => {
+          const paramNodeId = nodeId++;
+          nodes.push({
+            id: paramNodeId,
+            label: `${param.name} : ${param.type}`,
+            shape: 'circle',
+            color: '#b6d7a8'
+          });
+          edges.push({ from: methodNodeId, to: paramNodeId, arrows: 'to' });
+        });
+      });
+
+      // Recursive dependencies
+      classObj.level1Dependencies.forEach((dep: any) => {
+        addClassGraph(dep, classNodeId);
+      });
+    };
+
+    this.data.forEach((classObj: any) => addClassGraph(classObj));
+
+    const container = this.visContainer.nativeElement;
+    const networkData = {
+      nodes: new DataSet(nodes),
+      edges: new DataSet(edges)
+    };
+
+    const options = {
+      layout: { hierarchical: { enabled: true, direction: 'UD', sortMethod: 'directed' } },
+      nodes: { font: { size: 16 }, borderWidth: 2 },
+      edges: { arrows: 'to', smooth: true }
+    };
+
+    new Network(container, networkData, options);
+  }
+}
