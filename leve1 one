@@ -1,0 +1,217 @@
+import com.fasterxml.jackson.databind.ObjectMapper;
+import spoon.Launcher;
+import spoon.reflect.CtModel;
+import spoon.reflect.code.CtInvocation;
+import spoon.reflect.code.CtFieldRead;
+import spoon.reflect.declaration.CtClass;
+import spoon.reflect.declaration.CtField;
+import spoon.reflect.declaration.CtMethod;
+import spoon.reflect.declaration.CtType;
+import spoon.reflect.declaration.CtAnnotation;
+import spoon.reflect.reference.CtFieldReference;
+import spoon.reflect.reference.CtTypeReference;
+import spoon.reflect.visitor.filter.TypeFilter;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+
+// --- DUMMY INFO CLASSES (REQUIRED FOR COMPILATION) ---
+// Note: You must ensure these classes match the structure used in your actual project.
+class FieldInfo {
+    public String name;
+    public String type;
+    public FieldInfo(String name, String type) { this.name = name; this.type = type; }
+}
+class ParameterInfo {
+    public String name;
+    public String type;
+    public ParameterInfo(String name, String type) { this.name = name; this.type = type; }
+}
+class MethodInfo {
+    public String name;
+    public String returnType;
+    private List<ParameterInfo> parameters = new ArrayList<>();
+    public String getName() { return name; }
+    public void setName(String name) { this.name = name; }
+    public String getReturnType() { return returnType; }
+    public void setReturnType(String returnType) { this.returnType = returnType; }
+    public List<ParameterInfo> getParameters() { return parameters; }
+}
+class ClassInfo {
+    private String className;
+    private List<FieldInfo> fields = new ArrayList<>();
+    private List<MethodInfo> methods = new ArrayList<>();
+    public String getClassName() { return className; }
+    public void setClassName(String className) { this.className = className; }
+    public List<FieldInfo> getFields() { return fields; }
+    public List<MethodInfo> getMethods() { return methods; }
+    // We add a new list to hold the tracing data
+    private List<String> autowiredCallTraces = new ArrayList<>();
+    public List<String> getAutowiredCallTraces() { return autowiredCallTraces; }
+}
+// --------------------------------------------------------
+
+
+public class ClassInfoExtractor {
+
+    private static final String AUTOWIRED_ANNOTATION = "org.springframework.beans.factory.annotation.Autowired";
+    private static final String INJECT_ANNOTATION = "jakarta.inject.Inject";
+
+    public static void main(String[] args) throws Exception {
+        Launcher launcher = new Launcher();
+        // IMPORTANT: Ensure this path is correct for your project
+        launcher.addInputResource("src/main/java"); 
+        launcher.buildModel();
+
+        CtModel model = launcher.getModel();
+        List<ClassInfo> classes = new ArrayList<>();
+
+        for (CtType<?> type : model.getAllTypes()) {
+            if (type instanceof CtClass) {
+                CtClass<?> ctClass = (CtClass<?>) type;
+
+                ClassInfo classInfo = new ClassInfo();
+                classInfo.setClassName(ctClass.getQualifiedName());
+
+                // Fields extraction (Original Logic)
+                for (CtField<?> field : ctClass.getFields()) {
+                    classInfo.getFields().add(new FieldInfo(
+                            field.getSimpleName(),
+                            field.getType().toString()
+                    ));
+                }
+
+                // Methods extraction and DEEP METHOD BODY ANALYSIS (Integrated Logic)
+                for (CtMethod<?> method : ctClass.getMethods()) {
+                    MethodInfo methodInfo = new MethodInfo();
+                    methodInfo.setName(method.getSimpleName());
+                    methodInfo.setReturnType(method.getType().toString());
+
+                    method.getParameters().forEach(param ->
+                            methodInfo.getParameters().add(new ParameterInfo(
+                                    param.getSimpleName(),
+                                    param.getType().toString()
+                            ))
+                    );
+
+                    // ====================================================================
+                    // >>> INTEGRATED DEEP METHOD BODY ANALYSIS <<<
+                    // Find all method invocations inside the current method's body
+                    method.getElements(new TypeFilter<>(CtInvocation.class)).forEach(invocation -> {
+                        
+                        // 1. Check if the invocation target is a field access (e.g., this.service.method())
+                        if (!(invocation.getTarget() instanceof CtFieldRead<?>)) {
+                            return; 
+                        }
+
+                        CtFieldRead<?> fieldRead = (CtFieldRead<?>) invocation.getTarget();
+                        CtFieldReference<?> fieldRef = fieldRead.getVariable();
+                        CtField<?> targetField = fieldRef.getFieldDeclaration();
+
+                        if (targetField == null) {
+                            return; 
+                        }
+
+                        // 2. Check if the field is @Autowired (or @Inject)
+                        if (!isFieldAutowired(targetField)) {
+                            return; 
+                        }
+
+                        // 3. Check if the field type is an interface
+                        CtTypeReference<?> fieldTypeRef = targetField.getType();
+                        CtType<?> fieldType = fieldTypeRef.getDeclaration();
+
+                        if (fieldType != null && fieldType.isInterface()) {
+                            
+                            // 4. Resolve the Implementation
+                            String interfaceName = fieldType.getQualifiedName();
+                            String calledMethodName = invocation.getExecutable().getSimpleName();
+                            int lineNumber = invocation.getPosition().getLine();
+                            String implementationName = resolveImplementation(fieldType, launcher); 
+                            
+                            String trace = String.format("Method: %s() [Line %d] calls %s.%s() on @Autowired interface %s. Resolved Impl: %s",
+                                    method.getSimpleName(), lineNumber, targetField.getSimpleName(), calledMethodName, interfaceName, implementationName);
+                            
+                            classInfo.getAutowiredCallTraces().add(trace);
+                        }
+                    });
+                    // >>> END OF INTEGRATED DEEP METHOD BODY ANALYSIS <<<
+                    // ====================================================================
+                    
+                    classInfo.getMethods().add(methodInfo);
+                }
+
+                classes.add(classInfo);
+            }
+        }
+
+        // Convert to JSON
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.writerWithDefaultPrettyPrinter().writeValue(new File("class-info.json"), classes);
+
+        // Print to console
+        System.out.println(mapper.writerWithDefaultPrettyPrinter().writeValueAsString(classes));
+    }
+    
+    // --- Helper Methods ---
+
+    private static boolean isFieldAutowired(CtField<?> field) {
+        Collection<CtAnnotation<?>> annotations = field.getAnnotations();
+        for (CtAnnotation<?> annotation : annotations) {
+            String qName = annotation.getAnnotationType().getQualifiedName();
+            if (qName.equals(AUTOWIRED_ANNOTATION) || qName.equals(INJECT_ANNOTATION)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * **CRITICAL STEP: Implementation Resolution**
+     * This is the heuristic to find the concrete class that implements the autowired interface.
+     */
+    private static String resolveImplementation(CtType<?> interfaceType, Launcher launcher) {
+        
+        String interfaceQName = interfaceType.getQualifiedName();
+
+        // Iterate over the entire model to find a concrete class that implements the interface
+        for (CtType<?> modelType : launcher.getModel().getAllTypes()) {
+            // Check if it's a concrete class (not an interface/abstract)
+            if (modelType instanceof CtClass && !modelType.isInterface() && !modelType.isAbstract()) {
+                
+                // Check if the class implements the target interface
+                if (modelType.getSuperInterfaces().stream()
+                        .anyMatch(i -> i.getQualifiedName().equals(interfaceQName))) {
+                    
+                    // Further refinement: Check for Spring/DI bean annotations (@Service, @Component, etc.)
+                    // This makes the resolution much more accurate.
+                    if (isSpringBean(modelType)) {
+                         return modelType.getQualifiedName();
+                    }
+                }
+            }
+        }
+        
+        // If no definitive implementation is found (e.g., class is outside the model)
+        return "UNRESOLVED_MODEL_SEARCH";
+    }
+
+    private static boolean isSpringBean(CtType<?> type) {
+        // Simple check for common Spring/DI bean annotations
+        if (type.getAnnotation(getFactory().Type().createReference("org.springframework.stereotype.Service")) != null ||
+            type.getAnnotation(getFactory().Type().createReference("org.springframework.stereotype.Component")) != null ||
+            type.getAnnotation(getFactory().Type().createReference("org.springframework.stereotype.Repository")) != null ||
+            type.getAnnotation(getFactory().Type().createReference("org.springframework.stereotype.Controller")) != null) {
+            return true;
+        }
+        return false;
+    }
+
+    // Since we are in a static context, we need a way to get the Factory for references
+    private static spoon.reflect.factory.Factory getFactory() {
+        // Assuming the Launcher has run and the model is built
+        return Launcher.getLauncher().getFactory();
+    }
+}
